@@ -69,6 +69,11 @@
   .scan-item:last-child { border: none; }
   .pill { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
   .err { color: var(--red); }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .chip.active { border-color: var(--accent); color: var(--accent); }
   .hidden { display: none; }
   .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--hint); border-top-color: transparent;
     border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; }
@@ -91,6 +96,8 @@
       <datalist id="symbols"></datalist>
       <button class="btn" id="go">Анализ</button>
     </div>
+    <div class="chips" id="chips"></div>
+    <div class="hint" id="pairsCount" style="margin:-4px 0 8px"></div>
     <div class="tfs" id="tfs">
       <button class="tf" data-tf="15m">15m</button>
       <button class="tf active" data-tf="1h">1h</button>
@@ -153,7 +160,18 @@
       <button class="tf" data-tf="4h">4h</button>
       <button class="tf" data-tf="1d">1D</button>
     </div>
-    <button class="btn" id="scanBtn" style="width:100%;margin-bottom:10px">Сканировать топ-20 монет</button>
+    <div class="row">
+      <select id="scanN">
+        <option value="20">Топ-20 по объёму</option>
+        <option value="50" selected>Топ-50 по объёму</option>
+        <option value="100">Топ-100 по объёму</option>
+        <option value="200">Топ-200 по объёму</option>
+      </select>
+      <button class="btn" id="scanBtn">Сканировать</button>
+    </div>
+    <div class="row">
+      <label class="hint" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="onlySignals" style="flex:none"> Только ПОКУПКА / ПРОДАЖА</label>
+    </div>
     <div class="card" id="scanList"><span class="hint">Сканер найдёт монеты с самыми сильными сигналами на покупку и продажу.</span></div>
   </section>
 
@@ -167,8 +185,26 @@ if (tg) { tg.ready(); tg.expand(); }
 const haptic = t => { try { tg && tg.HapticFeedback.notificationOccurred(t); } catch (e) {} };
 
 const API = 'https://data-api.binance.vision/api/v3';
-const TOP = ['BTC','ETH','BNB','SOL','XRP','DOGE','ADA','TRX','AVAX','LINK','TON','DOT','LTC','BCH','NEAR','UNI','APT','SUI','ARB','OP'].map(s => s + 'USDT');
-document.getElementById('symbols').innerHTML = TOP.map(s => `<option value="${s}">`).join('');
+// запасной список, если не удалось загрузить пары с биржи
+let TOP = ['BTC','ETH','BNB','SOL','XRP','DOGE','ADA','TRX','AVAX','LINK','TON','DOT','LTC','BCH','NEAR','UNI','APT','SUI','ARB','OP'].map(s => s + 'USDT');
+const STABLE = /^(USDC|FDUSD|TUSD|USDP|DAI|BUSD|EUR|AEUR|EURI|USD1|XUSD|PAXG|WBTC|WBETH|BFUSD|USDE|RLUSD)USDT$/;
+
+// все торгуемые пары к USDT, отсортированные по обороту за 24ч
+async function loadPairs() {
+  try {
+    const r = await fetch(`${API}/ticker/24hr?type=MINI`);
+    const all = await r.json();
+    const pairs = all
+      .filter(t => t.symbol.endsWith('USDT') && !STABLE.test(t.symbol) && !/(UP|DOWN|BULL|BEAR)USDT$/.test(t.symbol)
+        && +t.quoteVolume > 0 && +t.closeTime > Date.now() - 864e5)
+      .sort((a, b) => b.quoteVolume - a.quoteVolume)
+      .map(t => t.symbol);
+    if (pairs.length > 20) TOP = pairs;
+  } catch (e) {}
+  $('symbols').innerHTML = TOP.map(s => `<option value="${s}">`).join('');
+  $('chips').innerHTML = TOP.slice(0, 30).map(s => `<button class="chip" data-s="${s}">${s.replace('USDT', '')}</button>`).join('');
+  $('pairsCount').textContent = `Доступно пар: ${TOP.length}`;
+}
 
 // ---------- data ----------
 async function klines(symbol, interval, limit = 1000) {
@@ -335,13 +371,17 @@ let tf = '1h', scanTf = '1h';
 const $ = id => document.getElementById(id);
 
 async function analyze() {
-  const symbol = $('symbol').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  let symbol = $('symbol').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!symbol) return;
+  // «eth» → ETHUSDT
+  if (!TOP.includes(symbol) && !/(USDT|USDC|FDUSD|BTC|ETH|BNB|EUR|TRY)$/.test(symbol)) symbol += 'USDT';
+  $('symbol').value = symbol;
+  document.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c.dataset.s === symbol));
   $('go').disabled = true;
   $('status').innerHTML = '<span class="spin"></span> Загружаю данные…';
   try {
     const k = await klines(symbol, tf);
-    if (k.length < 250) throw new Error('Мало истории для анализа');
+    if (k.length < 210) throw new Error('Мало истории для анализа (монета недавно на бирже) — попробуйте таймфрейм меньше');
     const I = computeAll(k), i = k.length - 1, last = k[i];
     const { score, reasons } = scoreAt(I, i);
     const v = verdict(score), pctScore = Math.round(score / MAX_SCORE * 100);
@@ -410,18 +450,27 @@ async function analyze() {
 // ---------- scanner ----------
 async function scan() {
   const btn = $('scanBtn'); btn.disabled = true;
-  const list = $('scanList'); list.innerHTML = '<span class="spin"></span> Сканирую…';
-  const res = [];
-  await Promise.all(TOP.map(async s => {
-    try {
-      const k = await klines(s, scanTf, 300);
-      const I = computeAll(k), i = k.length - 1;
-      const { score } = scoreAt(I, i);
-      res.push({ s, score, price: k[i].close, rsi: I.rsi[i] });
-    } catch (e) {}
-  }));
+  const list = $('scanList');
+  const pairs = TOP.slice(0, +$('scanN').value), res = [];
+  let done = 0;
+  const progress = () => list.innerHTML = `<span class="spin"></span> Сканирую… ${done} / ${pairs.length}`;
+  progress();
+  // по 10 запросов одновременно, чтобы не упереться в лимиты API
+  for (let b = 0; b < pairs.length; b += 10) {
+    await Promise.all(pairs.slice(b, b + 10).map(async s => {
+      try {
+        const k = await klines(s, scanTf, 300);
+        if (k.length < 210) return;
+        const I = computeAll(k), i = k.length - 1;
+        const { score } = scoreAt(I, i);
+        res.push({ s, score, price: k[i].close, rsi: I.rsi[i] });
+      } catch (e) {} finally { done++; progress(); }
+    }));
+  }
   res.sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
-  list.innerHTML = res.map(r => {
+  const shown = $('onlySignals').checked ? res.filter(r => verdict(r.score) !== 'WAIT') : res;
+  const nL = res.filter(r => verdict(r.score) === 'LONG').length, nS = res.filter(r => verdict(r.score) === 'SHORT').length;
+  list.innerHTML = `<div class="hint" style="margin-bottom:4px">Проверено ${res.length} пар · <span class="up">покупка: ${nL}</span> · <span class="down">продажа: ${nS}</span></div>` + (shown.map(r => {
     const v = verdict(r.score), p = Math.round(r.score / MAX_SCORE * 100);
     const cls = v === 'LONG' ? 'up' : v === 'SHORT' ? 'down' : 'neu';
     const bg = v === 'LONG' ? 'rgba(22,199,132,.15)' : v === 'SHORT' ? 'rgba(234,57,67,.15)' : 'rgba(240,185,11,.15)';
@@ -429,7 +478,7 @@ async function scan() {
       <div><b>${r.s.replace('USDT', '')}</b><span class="hint">/USDT</span><br><span class="hint">${fmt(r.price)} · RSI ${r.rsi.toFixed(0)}</span></div>
       <div style="text-align:right"><span class="pill ${cls}" style="background:${bg}">${{ LONG: 'ПОКУПКА', SHORT: 'ПРОДАЖА', WAIT: 'ЖДАТЬ' }[v]}</span><br>
       <b class="${cls}">${p > 0 ? '+' : ''}${p}%</b></div></div>`;
-  }).join('') || '<span class="err">Не удалось загрузить данные</span>';
+  }).join('') || '<span class="hint">Сейчас нет пар с сильным сигналом — попробуйте другой таймфрейм.</span>');
   btn.disabled = false; haptic('success');
 }
 
@@ -449,6 +498,10 @@ tfGroup('scanTfs', t => { scanTf = t; });
 $('go').onclick = analyze;
 $('symbol').addEventListener('keydown', e => e.key === 'Enter' && analyze());
 $('scanBtn').onclick = scan;
+$('chips').addEventListener('click', e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  $('symbol').value = c.dataset.s; analyze();
+});
 $('scanList').addEventListener('click', e => {
   const it = e.target.closest('.scan-item'); if (!it) return;
   $('symbol').value = it.dataset.s; tf = scanTf;
@@ -456,7 +509,7 @@ $('scanList').addEventListener('click', e => {
   document.querySelector('.tab[data-tab="analyze"]').click(); analyze();
 });
 
-analyze();
+loadPairs().then(analyze);
 </script>
 </body>
 </html>
