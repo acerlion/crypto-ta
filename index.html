@@ -69,20 +69,33 @@
   .scan-item:last-child { border: none; }
   .pill { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
   .err { color: var(--red); }
-  .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; scrollbar-width: none; }
-  .chips::-webkit-scrollbar { display: none; }
-  .chip { flex: none; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
-    background: var(--card); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
-  .chip.active { border-color: var(--accent); color: var(--accent); }
-  .picker-wrap { position: relative; z-index: 50; }
-  .picker { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1000; max-height: 340px; overflow-y: auto;
-    background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
-  .pk { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  /* кнопка выбора пары */
+  .pair-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left;
+    background: var(--card); color: var(--text); border: 1px solid var(--accent); border-radius: 14px; padding: 12px 14px;
+    margin-bottom: 10px; font: inherit; cursor: pointer; }
+  .pair-btn .pb-sym { font-size: 18px; font-weight: 800; }
+  .pair-btn .pb-sym span { color: var(--hint); font-weight: 600; font-size: 14px; }
+  .pair-btn .pb-right { display: flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 600; font-size: 13px; white-space: nowrap; }
+  .pair-btn .pb-arrow { font-size: 18px; }
+  /* шторка со списком пар */
+  .sheet { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; }
+  .sheet-panel { width: 100%; max-width: 640px; margin: 0 auto; height: 88vh; height: 88dvh; background: var(--bg);
+    border-radius: 18px 18px 0 0; display: flex; flex-direction: column; overflow: hidden; animation: up .2s ease-out; }
+  @keyframes up { from { transform: translateY(40px); opacity: .6; } }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; font-size: 16px; }
+  .sheet-close { background: var(--card); border: none; color: var(--text); width: 32px; height: 32px; border-radius: 50%; font-size: 16px; cursor: pointer; }
+  .sheet-search { margin: 0 16px 8px; flex: none !important; }
+  .sorts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 16px 8px; }
+  .sort { padding: 7px 0; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--hint);
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .sort.active { color: var(--text); background: var(--card); border-color: var(--accent); }
+  .sheet-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; touch-action: pan-y; padding: 0 8px 16px; }
+  .pk { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 11px 8px; border-bottom: 1px solid var(--border); cursor: pointer; }
   .pk:last-child { border: none; }
-  .pk:hover, .pk.sel { background: var(--bg); }
-  .pk .n { color: var(--hint); font-size: 11px; width: 26px; }
+  .pk:active, .pk.sel { background: var(--card); border-radius: 10px; }
+  .pk .n { color: var(--hint); font-size: 11px; width: 28px; flex: none; }
   .pk .r { text-align: right; font-size: 12px; }
-  .all-pairs { background: none; border: none; color: var(--accent); font: inherit; font-size: 12px; padding: 0; margin: -4px 0 8px; cursor: pointer; }
+  body.lock { overflow: hidden; }
   .hidden { display: none; }
   .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--hint); border-top-color: transparent;
     border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; }
@@ -100,13 +113,11 @@
 
   <!-- ===== ANALYZE ===== -->
   <section id="tab-analyze">
-    <div class="row picker-wrap">
-      <input id="symbol" value="BTCUSDT" placeholder="Поиск: btc, sol, pepe…" autocomplete="off" autocapitalize="characters" spellcheck="false">
-      <button class="btn" id="go">Анализ</button>
-      <div class="picker hidden" id="picker"></div>
-    </div>
-    <div class="chips" id="chips"></div>
-    <button class="all-pairs" id="pairsCount"></button>
+    <input type="hidden" id="symbol" value="BTCUSDT">
+    <button class="pair-btn" id="pairBtn">
+      <div><div class="pb-sym" id="pbSym">BTC<span>/USDT</span></div><div class="hint" id="pbInfo">Нажмите, чтобы выбрать пару</div></div>
+      <div class="pb-right"><span id="pairsCount">Все пары</span><span class="pb-arrow">▾</span></div>
+    </button>
     <div class="tfs" id="tfs">
       <button class="tf" data-tf="15m">15m</button>
       <button class="tf active" data-tf="1h">1h</button>
@@ -184,13 +195,31 @@
     <div class="card" id="scanList"><span class="hint">Сканер найдёт монеты с самыми сильными сигналами на покупку и продажу.</span></div>
   </section>
 
+  <!-- ===== PAIR SHEET ===== -->
+  <div class="sheet hidden" id="sheet">
+    <div class="sheet-panel">
+      <div class="sheet-head"><b id="sheetTitle">Выберите пару</b><button class="sheet-close" id="sheetClose">✕</button></div>
+      <input class="sheet-search" id="search" placeholder="🔍 Поиск: btc, sol, pepe…" autocomplete="off" spellcheck="false">
+      <div class="sorts" id="sorts">
+        <button class="sort active" data-sort="vol">По объёму</button>
+        <button class="sort" data-sort="up">📈 Рост 24ч</button>
+        <button class="sort" data-sort="down">📉 Падение 24ч</button>
+      </div>
+      <div class="sheet-list" id="picker"></div>
+    </div>
+  </div>
+
   <p class="hint" style="margin-top:16px">⚠️ Сигналы рассчитываются автоматически по техническим индикаторам и не являются
     финансовой рекомендацией. Криптовалюты очень волатильны — используйте стоп-лосс и рискуйте только тем, что готовы потерять.</p>
 </div>
 
 <script>
 const tg = window.Telegram && Telegram.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
+if (tg) {
+  tg.ready(); tg.expand();
+  // чтобы прокрутка списков не сворачивала мини-приложение
+  try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
+}
 const haptic = t => { try { tg && tg.HapticFeedback.notificationOccurred(t); } catch (e) {} };
 
 const API = 'https://data-api.binance.vision/api/v3';
@@ -210,26 +239,48 @@ async function loadPairs() {
     pairs.forEach(t => TICK[t.symbol] = { price: +t.lastPrice, chg: (t.lastPrice - t.openPrice) / t.openPrice * 100, vol: +t.quoteVolume });
     if (pairs.length > 20) TOP = pairs.map(t => t.symbol);
   } catch (e) {}
-  $('chips').innerHTML = TOP.slice(0, 30).map(s => `<button class="chip" data-s="${s}">${s.replace('USDT', '')}</button>`).join('');
-  $('pairsCount').textContent = `Все пары (${TOP.length}) ▾`;
+  $('pairsCount').textContent = `Все пары (${TOP.length})`;
+  $('sheetTitle').textContent = `Выберите пару · ${TOP.length}`;
 }
 const TICK = {};
 
-// ---------- выбор пары из полного списка ----------
+// ---------- выбор пары: шторка со списком ----------
 const volFmt = v => v >= 1e9 ? (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : (v / 1e3).toFixed(0) + 'K';
-function renderPicker(q) {
-  q = (q || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const list = TOP.map((s, i) => [s, i]).filter(([s]) => !q || s.replace('USDT', '').includes(q))
-    // точное совпадение и начало названия — выше
-    .sort((a, b) => (b[0].startsWith(q) - a[0].startsWith(q)) || a[1] - b[1]);
+let sortMode = 'vol';
+function renderPicker() {
+  const q = $('search').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cur = $('symbol').value;
+  let list = TOP.map((s, i) => [s, i]).filter(([s]) => !q || s.replace('USDT', '').includes(q));
+  const chg = s => (TICK[s] ? TICK[s].chg : 0);
+  if (sortMode === 'up') list.sort((a, b) => chg(b[0]) - chg(a[0]));
+  else if (sortMode === 'down') list.sort((a, b) => chg(a[0]) - chg(b[0]));
+  // при поиске: начало названия — выше
+  if (q) list.sort((a, b) => b[0].startsWith(q) - a[0].startsWith(q));
   $('picker').innerHTML = list.length ? list.map(([s, i]) => {
     const t = TICK[s];
-    const right = t ? `${fmt(t.price)}<br><span class="${t.chg >= 0 ? 'up' : 'down'}">${sgn(t.chg)}</span> <span class="hint">· ${volFmt(t.vol)}</span>` : '';
-    return `<div class="pk" data-s="${s}"><span class="n">${i + 1}</span><b style="flex:1">${s.replace('USDT', '')}<span class="hint">/USDT</span></b><span class="r">${right}</span></div>`;
+    const right = t ? `<b>${fmt(t.price)}</b><br><span class="${t.chg >= 0 ? 'up' : 'down'}">${sgn(t.chg)}</span> <span class="hint">· ${volFmt(t.vol)}</span>` : '';
+    return `<div class="pk${s === cur ? ' sel' : ''}" data-s="${s}"><span class="n">${i + 1}</span><b style="flex:1">${s.replace('USDT', '')}<span class="hint">/USDT</span></b><span class="r">${right}</span></div>`;
   }).join('') : '<div class="pk hint">Ничего не найдено</div>';
-  $('picker').classList.remove('hidden');
 }
-const hidePicker = () => $('picker').classList.add('hidden');
+function openSheet() {
+  $('search').value = '';
+  renderPicker();
+  $('sheet').classList.remove('hidden');
+  document.body.classList.add('lock');
+  $('picker').scrollTop = 0;
+  if (tg && tg.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(closeSheet); }
+}
+function closeSheet() {
+  $('sheet').classList.add('hidden');
+  document.body.classList.remove('lock');
+  if (tg && tg.BackButton) { tg.BackButton.hide(); tg.BackButton.offClick(closeSheet); }
+}
+function updatePairBtn(symbol) {
+  const base = symbol.replace(/USDT$/, ''), quote = symbol.slice(base.length) || '';
+  $('pbSym').innerHTML = `${base}<span>${quote ? '/' + quote : ''}</span>`;
+  const t = TICK[symbol];
+  $('pbInfo').innerHTML = t ? `${fmt(t.price)} · <span class="${t.chg >= 0 ? 'up' : 'down'}">${sgn(t.chg)}</span> за 24ч` : 'Нажмите, чтобы выбрать пару';
+}
 
 // ---------- data ----------
 async function klines(symbol, interval, limit = 1000) {
@@ -401,8 +452,8 @@ async function analyze() {
   // «eth» → ETHUSDT
   if (!TOP.includes(symbol) && !/(USDT|USDC|FDUSD|BTC|ETH|BNB|EUR|TRY)$/.test(symbol)) symbol += 'USDT';
   $('symbol').value = symbol;
-  document.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c.dataset.s === symbol));
-  $('go').disabled = true;
+  updatePairBtn(symbol);
+  $('pairBtn').disabled = true;
   $('status').innerHTML = '<span class="spin"></span> Загружаю данные…';
   try {
     const k = await klines(symbol, tf);
@@ -469,7 +520,7 @@ async function analyze() {
   } catch (err) {
     $('status').innerHTML = `<span class="err">${err.message}</span>`;
     haptic('error');
-  } finally { $('go').disabled = false; }
+  } finally { $('pairBtn').disabled = false; }
 }
 
 // ---------- scanner ----------
@@ -520,27 +571,26 @@ function tfGroup(id, cb) {
 }
 tfGroup('tfs', t => { tf = t; analyze(); });
 tfGroup('scanTfs', t => { scanTf = t; });
-$('go').onclick = () => { hidePicker(); analyze(); };
-$('symbol').addEventListener('keydown', e => {
-  if (e.key !== 'Enter') return;
-  // Enter берёт первую пару из отфильтрованного списка
-  const first = $('picker').querySelector('.pk[data-s]');
-  if (first && !$('picker').classList.contains('hidden')) $('symbol').value = first.dataset.s;
-  hidePicker(); $('symbol').blur(); analyze();
-});
 $('scanBtn').onclick = scan;
-$('symbol').addEventListener('focus', e => { e.target.select(); renderPicker(''); });
-$('symbol').addEventListener('input', e => renderPicker(e.target.value));
-$('pairsCount').onclick = e => { e.stopPropagation(); $('picker').classList.contains('hidden') ? renderPicker('') : hidePicker(); };
-$('picker').addEventListener('mousedown', e => e.preventDefault()); // не терять фокус при выборе
+$('pairBtn').onclick = openSheet;
+$('sheetClose').onclick = closeSheet;
+$('sheet').addEventListener('click', e => { if (e.target.id === 'sheet') closeSheet(); }); // тап по затемнению
+$('search').addEventListener('input', renderPicker);
+$('search').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  // Enter берёт первую пару из найденных
+  const first = $('picker').querySelector('.pk[data-s]');
+  if (first) first.click(); else $('search').blur();
+});
+$('sorts').addEventListener('click', e => {
+  const b = e.target.closest('.sort'); if (!b) return;
+  sortMode = b.dataset.sort;
+  document.querySelectorAll('.sort').forEach(x => x.classList.toggle('active', x === b));
+  renderPicker(); $('picker').scrollTop = 0;
+});
 $('picker').addEventListener('click', e => {
   const it = e.target.closest('.pk[data-s]'); if (!it) return;
-  $('symbol').value = it.dataset.s; hidePicker(); $('symbol').blur(); analyze();
-});
-document.addEventListener('click', e => { if (!e.target.closest('.picker-wrap') && e.target.id !== 'pairsCount') hidePicker(); });
-$('chips').addEventListener('click', e => {
-  const c = e.target.closest('.chip'); if (!c) return;
-  $('symbol').value = c.dataset.s; analyze();
+  $('symbol').value = it.dataset.s; $('search').blur(); closeSheet(); analyze();
 });
 $('scanList').addEventListener('click', e => {
   const it = e.target.closest('.scan-item'); if (!it) return;
