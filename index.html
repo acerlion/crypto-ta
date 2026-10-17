@@ -74,6 +74,15 @@
   .chip { flex: none; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
     background: var(--card); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .chip.active { border-color: var(--accent); color: var(--accent); }
+  .picker-wrap { position: relative; z-index: 50; }
+  .picker { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1000; max-height: 340px; overflow-y: auto;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+  .pk { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .pk:last-child { border: none; }
+  .pk:hover, .pk.sel { background: var(--bg); }
+  .pk .n { color: var(--hint); font-size: 11px; width: 26px; }
+  .pk .r { text-align: right; font-size: 12px; }
+  .all-pairs { background: none; border: none; color: var(--accent); font: inherit; font-size: 12px; padding: 0; margin: -4px 0 8px; cursor: pointer; }
   .hidden { display: none; }
   .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--hint); border-top-color: transparent;
     border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; }
@@ -91,13 +100,13 @@
 
   <!-- ===== ANALYZE ===== -->
   <section id="tab-analyze">
-    <div class="row">
-      <input id="symbol" list="symbols" value="BTCUSDT" autocapitalize="characters" spellcheck="false">
-      <datalist id="symbols"></datalist>
+    <div class="row picker-wrap">
+      <input id="symbol" value="BTCUSDT" placeholder="Поиск: btc, sol, pepe…" autocomplete="off" autocapitalize="characters" spellcheck="false">
       <button class="btn" id="go">Анализ</button>
+      <div class="picker hidden" id="picker"></div>
     </div>
     <div class="chips" id="chips"></div>
-    <div class="hint" id="pairsCount" style="margin:-4px 0 8px"></div>
+    <button class="all-pairs" id="pairsCount"></button>
     <div class="tfs" id="tfs">
       <button class="tf" data-tf="15m">15m</button>
       <button class="tf active" data-tf="1h">1h</button>
@@ -197,14 +206,30 @@ async function loadPairs() {
     const pairs = all
       .filter(t => t.symbol.endsWith('USDT') && !STABLE.test(t.symbol) && !/(UP|DOWN|BULL|BEAR)USDT$/.test(t.symbol)
         && +t.quoteVolume > 0 && +t.closeTime > Date.now() - 864e5)
-      .sort((a, b) => b.quoteVolume - a.quoteVolume)
-      .map(t => t.symbol);
-    if (pairs.length > 20) TOP = pairs;
+      .sort((a, b) => b.quoteVolume - a.quoteVolume);
+    pairs.forEach(t => TICK[t.symbol] = { price: +t.lastPrice, chg: (t.lastPrice - t.openPrice) / t.openPrice * 100, vol: +t.quoteVolume });
+    if (pairs.length > 20) TOP = pairs.map(t => t.symbol);
   } catch (e) {}
-  $('symbols').innerHTML = TOP.map(s => `<option value="${s}">`).join('');
   $('chips').innerHTML = TOP.slice(0, 30).map(s => `<button class="chip" data-s="${s}">${s.replace('USDT', '')}</button>`).join('');
-  $('pairsCount').textContent = `Доступно пар: ${TOP.length}`;
+  $('pairsCount').textContent = `Все пары (${TOP.length}) ▾`;
 }
+const TICK = {};
+
+// ---------- выбор пары из полного списка ----------
+const volFmt = v => v >= 1e9 ? (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : (v / 1e3).toFixed(0) + 'K';
+function renderPicker(q) {
+  q = (q || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const list = TOP.map((s, i) => [s, i]).filter(([s]) => !q || s.replace('USDT', '').includes(q))
+    // точное совпадение и начало названия — выше
+    .sort((a, b) => (b[0].startsWith(q) - a[0].startsWith(q)) || a[1] - b[1]);
+  $('picker').innerHTML = list.length ? list.map(([s, i]) => {
+    const t = TICK[s];
+    const right = t ? `${fmt(t.price)}<br><span class="${t.chg >= 0 ? 'up' : 'down'}">${sgn(t.chg)}</span> <span class="hint">· ${volFmt(t.vol)}</span>` : '';
+    return `<div class="pk" data-s="${s}"><span class="n">${i + 1}</span><b style="flex:1">${s.replace('USDT', '')}<span class="hint">/USDT</span></b><span class="r">${right}</span></div>`;
+  }).join('') : '<div class="pk hint">Ничего не найдено</div>';
+  $('picker').classList.remove('hidden');
+}
+const hidePicker = () => $('picker').classList.add('hidden');
 
 // ---------- data ----------
 async function klines(symbol, interval, limit = 1000) {
@@ -495,9 +520,24 @@ function tfGroup(id, cb) {
 }
 tfGroup('tfs', t => { tf = t; analyze(); });
 tfGroup('scanTfs', t => { scanTf = t; });
-$('go').onclick = analyze;
-$('symbol').addEventListener('keydown', e => e.key === 'Enter' && analyze());
+$('go').onclick = () => { hidePicker(); analyze(); };
+$('symbol').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  // Enter берёт первую пару из отфильтрованного списка
+  const first = $('picker').querySelector('.pk[data-s]');
+  if (first && !$('picker').classList.contains('hidden')) $('symbol').value = first.dataset.s;
+  hidePicker(); $('symbol').blur(); analyze();
+});
 $('scanBtn').onclick = scan;
+$('symbol').addEventListener('focus', e => { e.target.select(); renderPicker(''); });
+$('symbol').addEventListener('input', e => renderPicker(e.target.value));
+$('pairsCount').onclick = e => { e.stopPropagation(); $('picker').classList.contains('hidden') ? renderPicker('') : hidePicker(); };
+$('picker').addEventListener('mousedown', e => e.preventDefault()); // не терять фокус при выборе
+$('picker').addEventListener('click', e => {
+  const it = e.target.closest('.pk[data-s]'); if (!it) return;
+  $('symbol').value = it.dataset.s; hidePicker(); $('symbol').blur(); analyze();
+});
+document.addEventListener('click', e => { if (!e.target.closest('.picker-wrap') && e.target.id !== 'pairsCount') hidePicker(); });
 $('chips').addEventListener('click', e => {
   const c = e.target.closest('.chip'); if (!c) return;
   $('symbol').value = c.dataset.s; analyze();
