@@ -125,13 +125,10 @@
       <div><div class="pb-sym" id="pbSym">BTC<span>/USDT</span></div><div class="hint" id="pbInfo">Нажмите, чтобы выбрать пару</div></div>
       <div class="pb-right"><span id="pairsCount">Все пары</span><span class="pb-arrow">▾</span></div>
     </button>
-    <div class="hint" style="margin:-2px 0 6px">Таймфрейм графика</div>
+    <div class="hint" style="margin:-2px 0 6px">Таймфрейм (оставлены самые точные по бэктесту)</div>
     <div class="tfs" id="tfs">
-      <button class="tf" data-tf="5m">5m</button>
       <button class="tf" data-tf="15m">15m</button>
-      <button class="tf active" data-tf="1h">1h</button>
-      <button class="tf" data-tf="4h">4h</button>
-      <button class="tf" data-tf="1d">1D</button>
+      <button class="tf active" data-tf="1h">1h ★ лучший</button>
     </div>
     <div id="status" class="hint" style="margin-bottom:6px"></div>
     <button class="analyze-btn" id="analyzeBtn">🔍 Анализ <span id="analyzeWhat">BTC/USDT · 1h</span></button>
@@ -184,11 +181,8 @@
   <!-- ===== SCAN ===== -->
   <section id="tab-scan" class="hidden">
     <div class="tfs" id="scanTfs">
-      <button class="tf" data-tf="5m">5m</button>
       <button class="tf" data-tf="15m">15m</button>
-      <button class="tf active" data-tf="1h">1h</button>
-      <button class="tf" data-tf="4h">4h</button>
-      <button class="tf" data-tf="1d">1D</button>
+      <button class="tf active" data-tf="1h">1h ★ лучший</button>
     </div>
     <div class="row">
       <select id="scanN">
@@ -381,16 +375,23 @@ function scoreAt(I, i) {
     const green = I.k[i].close >= I.k[i].open;
     add(green ? 0.5 : -0.5, `Объём ×${(I.v[i] / I.volAvg[i]).toFixed(1)} от среднего на ${green ? 'зелёной' : 'красной'} свече`);
   }
-  return { score: s, reasons: r };
+  let v = s >= 3 ? 'LONG' : s <= -3 ? 'SHORT' : 'WAIT';
+  // фильтр тренда: сделки только по направлению EMA200 — на бэктесте 20 монет это повысило винрейт на 15m и 1h
+  const up = c > I.ema200[i] && I.ema50[i] > I.ema200[i], dn = c < I.ema200[i] && I.ema50[i] < I.ema200[i];
+  if ((v === 'LONG' && !up) || (v === 'SHORT' && !dn)) {
+    r.push([0, `Сигнал на ${v === 'LONG' ? 'покупку' : 'продажу'} идёт против основного тренда — пропускаем`]);
+    v = 'WAIT';
+  }
+  return { score: s, reasons: r, v };
 }
-const verdict = s => s >= 3 ? 'LONG' : s <= -3 ? 'SHORT' : 'WAIT';
 const SL_ATR = 1.5, TP1_ATR = 2, TP2_ATR = 3.5;
+const FEE = 0.1; // комиссия биржи, % за вход и за выход
 
 function backtest(I) {
-  let wins = 0, losses = 0, pnl = 0;
+  let wins = 0, losses = 0, pnl = 0, atrSum = 0;
   const n = I.c.length;
   for (let i = 200; i < n - 1; i++) {
-    const v = verdict(scoreAt(I, i).score);
+    const v = scoreAt(I, i).v;
     if (v === 'WAIT') continue;
     const dir = v === 'LONG' ? 1 : -1, e = I.c[i], a = I.atr[i];
     const sl = e - dir * SL_ATR * a, tp = e + dir * TP1_ATR * a;
@@ -402,11 +403,15 @@ function backtest(I) {
       if (hitSL) { res = -1; break; }        // пессимистично: если оба в одной свече — считаем стоп
       if (hitTP) { res = 1; break; }
     }
-    if (res === 1) { wins++; pnl += TP1_ATR * a / e * 100; }
-    else if (res === -1) { losses++; pnl -= SL_ATR * a / e * 100; }
+    if (res === 1) { wins++; pnl += TP1_ATR * a / e * 100 - 2 * FEE; }
+    else if (res === -1) { losses++; pnl -= SL_ATR * a / e * 100 + 2 * FEE; }
+    if (res) atrSum += a / e * 100;
     i = j; // не открываем новую сделку, пока старая не закрыта
   }
-  return { wins, losses, pnl };
+  // винрейт безубыточности с учётом комиссии: p·(TP−2F) = (1−p)·(SL+2F)
+  const A = atrSum / ((wins + losses) || 1);
+  const breakeven = (SL_ATR * A + 2 * FEE) / ((SL_ATR + TP1_ATR) * A) * 100;
+  return { wins, losses, pnl, breakeven };
 }
 
 function levels(k, i, look = 120) {
@@ -475,8 +480,8 @@ async function analyze() {
     const k = await klines(symbol, tfA);
     if (k.length < 210) throw new Error('Мало истории для анализа (монета недавно на бирже) — попробуйте таймфрейм меньше');
     const I = computeAll(k), i = k.length - 1, last = k[i];
-    const { score, reasons } = scoreAt(I, i);
-    const v = verdict(score), pctScore = Math.round(score / MAX_SCORE * 100);
+    const { score, reasons, v } = scoreAt(I, i);
+    const pctScore = Math.round(score / MAX_SCORE * 100);
 
     lastKey = symbol + '|' + tfA;
     $('status').textContent = '';
@@ -522,15 +527,16 @@ async function analyze() {
       kv('ATR (волат.)', fmt(a) + ` <span class="hint">${(a / e * 100).toFixed(2)}%</span>`);
 
     $('reasons').innerHTML = reasons.map(([p, t]) =>
-      `<li><span>${t}</span><b class="${p > 0 ? 'up' : 'down'}">${p > 0 ? '+' : ''}${p}</b></li>`).join('');
+      `<li><span>${t}</span><b class="${p > 0 ? 'up' : p < 0 ? 'down' : 'neu'}">${p === 0 ? '⛔' : (p > 0 ? '+' : '') + p}</b></li>`).join('');
 
     const bt = backtest(I), total = bt.wins + bt.losses;
     const wr = total ? bt.wins / total * 100 : 0;
     $('bt').innerHTML = total ? `<div class="grid">
-        ${kv('Сделок', total)}${kv('Винрейт', wr.toFixed(0) + '%', wr >= 43 ? 'up' : 'down')}
-        ${kv('Прибыльных / убыточных', bt.wins + ' / ' + bt.losses)}${kv('Сумма движений', sgn(bt.pnl), bt.pnl >= 0 ? 'up' : 'down')}
-      </div><div class="hint" style="margin-top:8px">Проверка на последних ${k.length} свечах (${tfA}): вход по сигналу, стоп ${SL_ATR}×ATR, тейк ${TP1_ATR}×ATR, без комиссий.
-      Безубыточность при винрейте ≈43%. Прошлые результаты не гарантируют будущих.</div>`
+        ${kv('Сделок', total)}${kv('Винрейт', wr.toFixed(0) + '%', bt.pnl >= 0 ? 'up' : 'down')}
+        ${kv('Прибыльных / убыточных', bt.wins + ' / ' + bt.losses)}${kv('Итог с комиссией', sgn(bt.pnl), bt.pnl >= 0 ? 'up' : 'down')}
+      </div><div class="hint" style="margin-top:8px">Проверка на последних ${k.length} свечах (${tfA}): вход по сигналу, стоп ${SL_ATR}×ATR, тейк ${TP1_ATR}×ATR,
+      комиссия ${FEE}% за вход и выход. Для этой пары и таймфрейма, чтобы выйти в плюс, нужен винрейт от ${bt.breakeven.toFixed(0)}%
+      (чем ниже волатильность, тем сильнее мешает комиссия). Прошлые результаты не гарантируют будущих.</div>`
       : '<span class="hint">На этой истории сигналов не было.</span>';
 
     haptic(v === 'WAIT' ? 'warning' : 'success');
@@ -558,16 +564,17 @@ async function scan() {
         const k = await klines(s, scanTf, 300);
         if (k.length < 210) return;
         const I = computeAll(k), i = k.length - 1;
-        const { score } = scoreAt(I, i);
-        res.push({ s, score, price: k[i].close, rsi: I.rsi[i] });
+        const { score, v } = scoreAt(I, i);
+        res.push({ s, score, v, price: k[i].close, rsi: I.rsi[i] });
       } catch (e) {} finally { done++; progress(); }
     }));
   }
-  res.sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
-  const shown = $('onlySignals').checked ? res.filter(r => verdict(r.score) !== 'WAIT') : res;
-  const nL = res.filter(r => verdict(r.score) === 'LONG').length, nS = res.filter(r => verdict(r.score) === 'SHORT').length;
+  // сначала пары с сигналом, потом по силе
+  res.sort((a, b) => ((b.v !== 'WAIT') - (a.v !== 'WAIT')) || Math.abs(b.score) - Math.abs(a.score));
+  const shown = $('onlySignals').checked ? res.filter(r => r.v !== 'WAIT') : res;
+  const nL = res.filter(r => r.v === 'LONG').length, nS = res.filter(r => r.v === 'SHORT').length;
   list.innerHTML = `<div class="hint" style="margin-bottom:4px">Проверено ${res.length} пар · <span class="up">покупка: ${nL}</span> · <span class="down">продажа: ${nS}</span></div>` + (shown.map(r => {
-    const v = verdict(r.score), p = Math.round(r.score / MAX_SCORE * 100);
+    const v = r.v, p = Math.round(r.score / MAX_SCORE * 100);
     const cls = v === 'LONG' ? 'up' : v === 'SHORT' ? 'down' : 'neu';
     const bg = v === 'LONG' ? 'rgba(22,199,132,.15)' : v === 'SHORT' ? 'rgba(234,57,67,.15)' : 'rgba(240,185,11,.15)';
     return `<div class="scan-item" data-s="${r.s}">
