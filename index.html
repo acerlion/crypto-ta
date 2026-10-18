@@ -35,6 +35,13 @@
   button.btn { background: var(--accent); color: var(--accent-text); border: none; font-weight: 600; cursor: pointer; }
   button.btn:disabled { opacity: .5; }
   .tfs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .analyze-btn { width: 100%; padding: 14px; margin-bottom: 12px; border: none; border-radius: 14px; cursor: pointer;
+    background: var(--accent); color: var(--accent-text); font: inherit; font-size: 16px; font-weight: 800; }
+  .analyze-btn span { font-weight: 600; opacity: .85; font-size: 13px; margin-left: 4px; }
+  .analyze-btn:disabled { opacity: .6; }
+  .analyze-btn.ready { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(59,130,246,.25); } }
+  .stale { opacity: .45; transition: opacity .2s; }
   .tf { flex: 1; padding: 7px 0; border-radius: 8px; border: 1px solid var(--border);
     background: transparent; color: var(--hint); font-weight: 600; cursor: pointer; }
   .tf.active { color: var(--text); background: var(--card); border-color: var(--accent); }
@@ -118,14 +125,16 @@
       <div><div class="pb-sym" id="pbSym">BTC<span>/USDT</span></div><div class="hint" id="pbInfo">Нажмите, чтобы выбрать пару</div></div>
       <div class="pb-right"><span id="pairsCount">Все пары</span><span class="pb-arrow">▾</span></div>
     </button>
+    <div class="hint" style="margin:-2px 0 6px">Таймфрейм графика</div>
     <div class="tfs" id="tfs">
+      <button class="tf" data-tf="5m">5m</button>
       <button class="tf" data-tf="15m">15m</button>
       <button class="tf active" data-tf="1h">1h</button>
       <button class="tf" data-tf="4h">4h</button>
       <button class="tf" data-tf="1d">1D</button>
     </div>
-
-    <div id="status" class="hint"></div>
+    <div id="status" class="hint" style="margin-bottom:6px"></div>
+    <button class="analyze-btn" id="analyzeBtn">🔍 Анализ <span id="analyzeWhat">BTC/USDT · 1h</span></button>
 
     <div id="result" class="hidden">
       <div class="card">
@@ -175,6 +184,7 @@
   <!-- ===== SCAN ===== -->
   <section id="tab-scan" class="hidden">
     <div class="tfs" id="scanTfs">
+      <button class="tf" data-tf="5m">5m</button>
       <button class="tf" data-tf="15m">15m</button>
       <button class="tf active" data-tf="1h">1h</button>
       <button class="tf" data-tf="4h">4h</button>
@@ -434,6 +444,9 @@ function drawChart(k, I) {
   }
   const view = k.slice(-200);
   candles.setData(view);
+  // точность шкалы цены под монету (у DOGE/PEPE нужно больше знаков)
+  const p = view[view.length - 1].close, prec = p >= 1000 ? 2 : p >= 1 ? 4 : p >= 0.01 ? 5 : 8;
+  [candles, e20s, e50s, e200s].forEach(s => s.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: 10 ** -prec } }));
   const line = arr => view.map((b, i) => ({ time: b.time, value: arr[k.length - view.length + i] })).filter(p => !isNaN(p.value));
   e20s.setData(line(I.ema20)); e50s.setData(line(I.ema50)); e200s.setData(line(I.ema200));
   (candles._lines || []).forEach(l => candles.removePriceLine(l));
@@ -453,20 +466,24 @@ async function analyze() {
   if (!TOP.includes(symbol) && !/(USDT|USDC|FDUSD|BTC|ETH|BNB|EUR|TRY)$/.test(symbol)) symbol += 'USDT';
   $('symbol').value = symbol;
   updatePairBtn(symbol);
-  $('pairBtn').disabled = true;
+  const tfA = tf; // фиксируем таймфрейм на время загрузки
+  $('pairBtn').disabled = $('analyzeBtn').disabled = true;
+  $('analyzeBtn').classList.remove('ready');
+  $('analyzeWhat').textContent = `${symbol.replace(/USDT$/, '/USDT')} · ${tfA}`;
   $('status').innerHTML = '<span class="spin"></span> Загружаю данные…';
   try {
-    const k = await klines(symbol, tf);
+    const k = await klines(symbol, tfA);
     if (k.length < 210) throw new Error('Мало истории для анализа (монета недавно на бирже) — попробуйте таймфрейм меньше');
     const I = computeAll(k), i = k.length - 1, last = k[i];
     const { score, reasons } = scoreAt(I, i);
     const v = verdict(score), pctScore = Math.round(score / MAX_SCORE * 100);
 
+    lastKey = symbol + '|' + tfA;
     $('status').textContent = '';
-    $('result').classList.remove('hidden');
-    $('pairName').textContent = `${symbol} · ${tf} · обновлено ${new Date().toLocaleTimeString('ru-RU')}`;
+    $('result').classList.remove('hidden', 'stale');
+    $('pairName').textContent = `${symbol} · ${tfA} · обновлено ${new Date().toLocaleTimeString('ru-RU')}`;
     $('price').textContent = fmt(last.close);
-    const ch = pct(last.close, k[Math.max(0, i - ({ '15m': 96, '1h': 24, '4h': 6, '1d': 1 }[tf]))].close);
+    const ch = pct(last.close, k[Math.max(0, i - ({ '5m': 288, '15m': 96, '1h': 24, '4h': 6, '1d': 1 }[tfA]))].close);
     $('chg').textContent = sgn(ch) + ' за 24ч'; $('chg').className = 'chg ' + (ch >= 0 ? 'up' : 'down');
 
     const badge = $('badge');
@@ -512,7 +529,7 @@ async function analyze() {
     $('bt').innerHTML = total ? `<div class="grid">
         ${kv('Сделок', total)}${kv('Винрейт', wr.toFixed(0) + '%', wr >= 43 ? 'up' : 'down')}
         ${kv('Прибыльных / убыточных', bt.wins + ' / ' + bt.losses)}${kv('Сумма движений', sgn(bt.pnl), bt.pnl >= 0 ? 'up' : 'down')}
-      </div><div class="hint" style="margin-top:8px">Проверка на последних ${k.length} свечах (${tf}): вход по сигналу, стоп ${SL_ATR}×ATR, тейк ${TP1_ATR}×ATR, без комиссий.
+      </div><div class="hint" style="margin-top:8px">Проверка на последних ${k.length} свечах (${tfA}): вход по сигналу, стоп ${SL_ATR}×ATR, тейк ${TP1_ATR}×ATR, без комиссий.
       Безубыточность при винрейте ≈43%. Прошлые результаты не гарантируют будущих.</div>`
       : '<span class="hint">На этой истории сигналов не было.</span>';
 
@@ -520,7 +537,10 @@ async function analyze() {
   } catch (err) {
     $('status').innerHTML = `<span class="err">${err.message}</span>`;
     haptic('error');
-  } finally { $('pairBtn').disabled = false; }
+  } finally {
+    $('pairBtn').disabled = $('analyzeBtn').disabled = false;
+    if (lastKey) markReady(); // если пока грузилось, выбрали другую пару/таймфрейм
+  }
 }
 
 // ---------- scanner ----------
@@ -569,7 +589,18 @@ function tfGroup(id, cb) {
     document.querySelectorAll(`#${id} .tf`).forEach(x => x.classList.toggle('active', x === b)); cb(b.dataset.tf);
   });
 }
-tfGroup('tfs', t => { tf = t; analyze(); });
+// выбор пары и таймфрейма только запоминается — анализ запускает кнопка «Анализ»
+let lastKey = '';
+function markReady() {
+  const s = $('symbol').value, key = s + '|' + tf;
+  $('analyzeWhat').textContent = `${s.replace(/USDT$/, '/USDT')} · ${tf}`;
+  const changed = key !== lastKey;
+  $('analyzeBtn').classList.toggle('ready', changed && !!lastKey);
+  $('result').classList.toggle('stale', changed && !!lastKey);
+  $('status').textContent = changed && lastKey ? '👇 Нажмите «Анализ», чтобы получить сигнал для выбранной пары' : '';
+}
+tfGroup('tfs', t => { tf = t; markReady(); });
+$('analyzeBtn').onclick = analyze;
 tfGroup('scanTfs', t => { scanTf = t; });
 $('scanBtn').onclick = scan;
 $('pairBtn').onclick = openSheet;
@@ -590,7 +621,9 @@ $('sorts').addEventListener('click', e => {
 });
 $('picker').addEventListener('click', e => {
   const it = e.target.closest('.pk[data-s]'); if (!it) return;
-  $('symbol').value = it.dataset.s; $('search').blur(); closeSheet(); analyze();
+  $('symbol').value = it.dataset.s; $('search').blur(); closeSheet();
+  updatePairBtn(it.dataset.s); markReady();
+  try { tg && tg.HapticFeedback.selectionChanged(); } catch (e) {}
 });
 $('scanList').addEventListener('click', e => {
   const it = e.target.closest('.scan-item'); if (!it) return;
@@ -599,7 +632,9 @@ $('scanList').addEventListener('click', e => {
   document.querySelector('.tab[data-tab="analyze"]').click(); analyze();
 });
 
-loadPairs().then(analyze);
+// анализ BTC сразу, полный список пар (≈1 МБ) догружается параллельно
+analyze();
+loadPairs().then(() => updatePairBtn($('symbol').value));
 </script>
 </body>
 </html>
